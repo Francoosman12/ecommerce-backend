@@ -21,6 +21,22 @@ export const protect = async (req, res, next) => {
     }
 };
 
+// ─── optionalAuth: si hay token lo usa, si no, sigue como guest ───────────
+export const optionalAuth = async (req, res, next) => {
+    if (req.headers.authorization?.startsWith('Bearer')) {
+        try {
+            const token = req.headers.authorization.split(' ')[1];
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = await User.findById(decoded.id).select('-password');
+        } catch {
+            req.user = null;
+        }
+    } else {
+        req.user = null;
+    }
+    next();
+};
+
 // ─── adminOnly: verifica que el usuario sea admin ─────────────────────────
 // Siempre usar DESPUÉS de protect
 export const adminOnly = (req, res, next) => {
