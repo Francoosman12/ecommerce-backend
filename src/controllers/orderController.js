@@ -1,10 +1,9 @@
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import { getPricingCalculator } from '../utils/pricingHelper.js';
+import { sendOrderConfirmation, sendNewOrderAdmin } from '../utils/emailService.js';
 
 // ─── CREAR ORDEN ───────────────────────────────────────────────────────────
-// @route  POST /api/orders
-// @access Public (guest o cliente logueado)
 export const createOrder = async (req, res) => {
     try {
         const {
@@ -16,7 +15,6 @@ export const createOrder = async (req, res) => {
             selectedFinancingPlan
         } = req.body;
 
-        // ── Validaciones básicas ──
         if (!items || items.length === 0) {
             return res.status(400).json({ message: 'El pedido no tiene productos' });
         }
@@ -24,7 +22,6 @@ export const createOrder = async (req, res) => {
             return res.status(400).json({ message: 'La dirección de envío es obligatoria' });
         }
 
-        // ── Verificar stock y construir items con snapshot de precios ──
         const calcPrices = await getPricingCalculator();
         const orderItems = [];
         let subtotal = 0;
@@ -44,9 +41,8 @@ export const createOrder = async (req, res) => {
                 });
             }
 
-            // Calcular precio correcto según método de pago
             const productWithPrices = calcPrices(product.toObject());
-            const priceUnit = productWithPrices.prices.cash; // precio base siempre
+            const priceUnit = productWithPrices.prices.cash;
 
             orderItems.push({
                 product:   product._id,
@@ -60,16 +56,13 @@ export const createOrder = async (req, res) => {
             subtotal += priceUnit * item.quantity;
         }
 
-        // ── Calcular total final ──
-        // Si eligió un plan de financiación, el total es el del plan
         let totalAmount = subtotal;
         if (selectedFinancingPlan?.totalPrice) {
             totalAmount = selectedFinancingPlan.totalPrice;
         }
 
-        // ── Crear la orden ──
         const order = new Order({
-            user:         req.user?._id || null, // null si es guest
+            user:         req.user?._id || null,
             customerInfo,
             items:        orderItems,
             deliveryMethod,
@@ -83,12 +76,16 @@ export const createOrder = async (req, res) => {
 
         const savedOrder = await order.save();
 
-        // ── Descontar stock ──
+        // Descontar stock
         for (const item of items) {
             await Product.findByIdAndUpdate(item.productId, {
                 $inc: { stock: -item.quantity }
             });
         }
+
+        // Enviar emails (no bloqueamos la respuesta si fallan)
+        sendOrderConfirmation(savedOrder);
+        sendNewOrderAdmin(savedOrder);
 
         res.status(201).json(savedOrder);
 
@@ -99,8 +96,6 @@ export const createOrder = async (req, res) => {
 };
 
 // ─── OBTENER MIS ÓRDENES (cliente logueado) ────────────────────────────────
-// @route  GET /api/orders/my-orders
-// @access Privado (cliente)
 export const getMyOrders = async (req, res) => {
     try {
         const orders = await Order.find({ user: req.user._id })
@@ -114,8 +109,6 @@ export const getMyOrders = async (req, res) => {
 };
 
 // ─── OBTENER UNA ORDEN POR ID ──────────────────────────────────────────────
-// @route  GET /api/orders/:id
-// @access Privado (dueño de la orden o admin)
 export const getOrderById = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id)
@@ -125,7 +118,6 @@ export const getOrderById = async (req, res) => {
             return res.status(404).json({ message: 'Orden no encontrada' });
         }
 
-        // Solo el dueño de la orden o un admin pueden verla
         const isOwner = order.user?.toString() === req.user._id.toString();
         if (!isOwner && !req.user.isAdmin) {
             return res.status(403).json({ message: 'No autorizado' });
@@ -138,12 +130,9 @@ export const getOrderById = async (req, res) => {
 };
 
 // ─── LISTAR TODAS LAS ÓRDENES (admin) ─────────────────────────────────────
-// @route  GET /api/orders
-// @access Admin
 export const getAllOrders = async (req, res) => {
     try {
         const { status, page = 1, limit = 20 } = req.query;
-
         const filter = status ? { status } : {};
 
         const orders = await Order.find(filter)
@@ -166,8 +155,6 @@ export const getAllOrders = async (req, res) => {
 };
 
 // ─── ACTUALIZAR ESTADO DE ORDEN (admin) ───────────────────────────────────
-// @route  PUT /api/orders/:id/status
-// @access Admin
 export const updateOrderStatus = async (req, res) => {
     try {
         const { status, adminNotes } = req.body;
@@ -175,10 +162,7 @@ export const updateOrderStatus = async (req, res) => {
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ message: 'Orden no encontrada' });
 
-        order.status = status || order.status;
-        if (adminNotes !== undefined) order.adminNotes = adminNotes;
-
-        // Si el admin marca como cancelado, devolvemos el stock
+        // Si se cancela devolvemos el stock
         if (status === 'cancelado' && order.status !== 'cancelado') {
             for (const item of order.items) {
                 await Product.findByIdAndUpdate(item.product, {
@@ -186,6 +170,9 @@ export const updateOrderStatus = async (req, res) => {
                 });
             }
         }
+
+        order.status = status || order.status;
+        if (adminNotes !== undefined) order.adminNotes = adminNotes;
 
         const updatedOrder = await order.save();
         res.json(updatedOrder);
