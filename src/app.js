@@ -18,22 +18,14 @@ dotenv.config();
 
 const app = express();
 
-// CORS — permite localhost en dev y el dominio de Vercel en producción
-const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:4173',
-    process.env.FRONTEND_URL,
-].filter(Boolean);
-
-app.use(cors({
-    origin: (origin, callback) => {
-        // Permitir requests sin origin (Postman, curl, Railway health checks)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
-        callback(new Error(`CORS bloqueado para: ${origin}`));
-    },
-    credentials: true,
-}));
+// CORS — acepta cualquier origen
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    next();
+});
 
 app.use(morgan('dev'));
 app.use(express.json());
